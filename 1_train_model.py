@@ -9,11 +9,7 @@ from tensorflow.python.keras import metrics
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras import backend as K
 
-
-# import tensorflow_transform as tft
-
 from utils import custom_metrics
-
 
 def parse_tfrecord(example_proto):
     """The parsing function.
@@ -24,7 +20,6 @@ def parse_tfrecord(example_proto):
         A dictionary of tensors, keyed by feature name.
     """
     return tf.io.parse_single_example(example_proto, FEATURES_DICT)
-
 
 def to_tuple(inputs):
     """Function to convert a dictionary of tensors to a tuple of (inputs, outputs).
@@ -40,7 +35,6 @@ def to_tuple(inputs):
     stacked = tf.transpose(stacked, [1, 2, 0])
     return stacked[:,:,:len(BANDS)], stacked[:,:,len(BANDS):]
 
-
 def get_dataset(pattern):
     """Function to read, parse and format to tuple a set of input tfrecord files.
     Get all the files matching the pattern, parse and convert to tuple.
@@ -51,32 +45,82 @@ def get_dataset(pattern):
     """
     glob = tf.io.gfile.glob(pattern)
     dataset = tf.data.TFRecordDataset(glob, compression_type='GZIP')
-    dataset = dataset.map(parse_tfrecord, num_parallel_calls=5)
-    dataset = dataset.map(to_tuple, num_parallel_calls=5)
+    dataset = dataset.map(parse_tfrecord, num_parallel_calls=8)
+    dataset = dataset.map(to_tuple, num_parallel_calls=8)
     return dataset
 
 def get_training_dataset(input_path):
-    """Get the preprocessed training dataset
+    """Loads the training dataset exported by GEE
     Returns: 
-    A tf.data.Dataset of training data.
+        A tf.data.Dataset of training data.
     """
-    dataset = get_dataset(input_path)
-    dataset = dataset.shuffle(BUFFER_SIZE).batch(BATCH_SIZE).repeat()
+    dataset = get_dataset(input_path+'Train*')
     return dataset
     
-def get_eval_dataset(input_path):
-    """Get the preprocessed evaluation dataset
+def get_testing_dataset(input_path):
+    """Loads the test dataset exported by GEE
         Returns: 
         A tf.data.Dataset of evaluation data.
     """
-    dataset = get_dataset(input_path)
-    dataset = dataset.batch(1).repeat()
+    dataset = get_dataset(input_path+'Test*')
     return dataset
 
-def dice_coef(y_true, y_pred, smooth=1):
-    intersection = K.dot(y_true, K.transpose(y_pred))
-    union = K.dot(y_true,K.transpose(y_true))+K.dot(y_pred,K.transpose(y_pred))
-    return (2. * intersection + smooth) / (union + smooth)
+def get_dataset_length(dataset):
+    '''Returns the length of a TFrecord dataset. Praise be TFRecords...'''
+    num_elements = 0
+    for element in dataset:
+        num_elements += 1
+    return num_elements
+
+def get_modeling_data_stats(train, test):
+    '''
+    Computes the channel means and the std of the train and test sets.
+    Additionall, the length of the training and testing sets are computed
+    
+    Paramters:
+        train: a TFRecordDataset for the training set
+        test: a TFRecordDataset for the testing set
+    
+    Returns:
+        
+    
+    '''
+    # Initialize the variables that we need to keep track of
+    mean = tf.constant([0.,0.,0.,0.])
+    std = tf.constant([0.,0.,0.,0.])
+    nb_samples = 0.0
+    train_len = 0.0
+    test_len = 0.0
+    
+    # Loop through the training dataset
+    for element in train:
+        mean = tf.math.add(mean, tf.math.reduce_mean(element[0], axis=[0,1]))
+        std = tf.math.add(std, tf.math.reduce_std(element[0], axis=[0,1]))
+        nb_samples += 1
+        train_len += 1
+    
+    # Loop through the testing dataset
+    for element in test:
+        mean = tf.math.add(mean, tf.math.reduce_mean(element[0], axis=[0,1]))
+        std = tf.math.add(std, tf.math.reduce_std(element[0], axis=[0,1]))
+        nb_samples += 1
+        test_len += 1
+        
+    # Divide by the number of elements in the two sets
+    mean = tf.math.divide(mean, nb_samples)
+    std = tf.math.divide(std, nb_samples)
+
+    return mean, std, train_len, test_len
+
+def apply_normalization(features, label):
+    '''
+    Apply the z-score transformation
+    Note this uses two global variables 
+    '''
+    norm = tf.math.divide(tf.math.subtract(features, NORM_MEAN), NORM_STD)
+    
+    return norm, label
+
 
 def jaccard_distance(y_true, y_pred, smooth=100):
     """Jaccard distance for semantic segmentation.
@@ -111,14 +155,6 @@ def jaccard_distance(y_true, y_pred, smooth=100):
     sum_ = K.sum(K.abs(y_true) + K.abs(y_pred), axis=-1)
     jac = (intersection + smooth) / (sum_ - intersection + smooth)
     return (1 - jac) * smooth
-
-def normalize_dataset(data, mean_data=None, std_data=None):
-    if not mean_data:
-        mean_data = np.mean(data)
-    if not std_data:
-        std_data = np.std(data)
-    norm_data = (data-mean_data)/std_data
-    return norm_data, mean_data, std_data
 
 
 def conv_block(input_tensor, num_filters):
@@ -175,12 +211,8 @@ def get_model(input_optimizer, input_loss_function, evaluation_metrics):
 
 if __name__ == "__main__":
     
-    # # Set the working directory to the file's directory
-    # os.chdir(os.path.dirname(sys.argv[0]))
-    
-    # Define the path to the training and evaluation datasets
-    training_path = ".\\training_data\\*"
-    evaluation_path = ".\\testing_data\\*"
+    # Set the path to the raw data
+    raw_data_path = ".\\raw_data\\"
     
     # Define the path to the log directory for tensorboard
     log_dir = '.\\logs'
@@ -199,10 +231,17 @@ if __name__ == "__main__":
     COLUMNS = [tf.io.FixedLenFeature(shape=kernel_shape, dtype=tf.float32) for k in FEATURES]
     FEATURES_DICT = dict(zip(FEATURES, COLUMNS))
 
-    # Sizes of the training and evaluation datasets.
-    TRAIN_SIZE = 10045
-    EVAL_SIZE = 8785
+    # Load the two raw datasets
+    raw_training_ds = get_training_dataset(raw_data_path)
+    raw_testing_ds = get_testing_dataset(raw_data_path)
     
+    # Compute the stats needed for normalization
+    NORM_MEAN, NORM_STD, TRAIN_SIZE, TEST_SIZE = get_modeling_data_stats(raw_training_ds, raw_testing_ds)
+    
+    # Normalize the training adn the testing sets to have zero mean and unit variance
+    training_ds = raw_training_ds.map(apply_normalization, num_parallel_calls=8)
+    testing_ds = raw_testing_ds.map(apply_normalization, num_parallel_calls=8)
+
     # Specify model training parameters.
     BATCH_SIZE = 16
     EPOCHS = 20
@@ -210,22 +249,18 @@ if __name__ == "__main__":
     optimizer = 'SGD'
     eval_metrics = ['Accuracy', custom_metrics.dice_coef, custom_metrics.f1_m, 
                     custom_metrics.precision_m, custom_metrics.recall_m]
-    
-    # Get the training and evaluation datasets
-    training = get_training_dataset(training_path)
-    evaluation = get_eval_dataset(evaluation_path)
 
     # Load the model -- Currently Google's UNET
     model = get_model(optimizer, jaccard_distance, eval_metrics)
 
     # Fit the model to the data
     model.fit(
-        x=training, 
-        epochs=EPOCHS, 
-        steps_per_epoch=int(TRAIN_SIZE / BATCH_SIZE), 
-        validation_data=evaluation,
-        validation_steps=EVAL_SIZE,
-        callbacks=[tf.keras.callbacks.TensorBoard(log_dir)]
+        x = training_ds, 
+        epochs = EPOCHS, 
+        steps_per_epoch = int(TRAIN_SIZE / BATCH_SIZE), 
+        validation_data = testing_ds,
+        validation_steps = TEST_SIZE,
+        callbacks = [tf.keras.callbacks.TensorBoard(log_dir)]
         )
     
     # Save the model
