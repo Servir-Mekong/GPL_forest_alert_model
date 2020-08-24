@@ -1,47 +1,11 @@
 import ee
 from time import sleep
 from os import system
+from utils import task_monitor
 
 ee.Initialize()
 
-class GEETaskMonitor():
-    
-    def __init__(self):
-        self.task_dict = {}
-        return None
 
-    def add_task(self, task_id, task):
-        '''Add a task to the task dictionary'''
-        self.task_dict[str(task_id)] = task
-        return None
-     
-    def reset_monitor(self):
-        '''Reset the task dictionary (removes all tasks)'''
-        self.task_dict = {}
-        return None 
-        
-    def begin_monitoring(self):
-        '''
-        Monitors the status of tasks being executed on the GEE server.
-        Returns a dictionary of input key-value pairs which failed.
-        '''
-        while True:
-            del_keys = []           
-            for key, value in self.task_dict.items():
-                try:
-                    state = ee.data.getTaskStatus(value.id)[0]['state']
-                    if state in ['READY', 'RUNNING']:
-                        pass
-                    else:
-                        del_keys.append(key)
-                except Exception:
-                    pass
-            for i in del_keys:
-                del self.task_dict[i]
-            if len(self.task_dict) == 0:
-                break
-            sleep(5)
-        return None
 
 class GenerateTrainingData():
     
@@ -63,7 +27,7 @@ class GenerateTrainingData():
         self.__gdrive_folder = gdrive_folder
         
         # Load in the task monitor
-        self.__task_monitor = GEETaskMonitor()
+        self.__task_monitor = task_monitor.GEETaskMonitor()
         
         
         # Run any error checks
@@ -75,11 +39,11 @@ class GenerateTrainingData():
     
     def InitiateProcessing(self):
         
-#        # Generate the assets needed
-#        self.__create_assets()
-#    
-#        # Clean the reference polygon dataset and generate the sample location centroids
-#        self.__perform_data_formatting()
+        # # Generate the assets needed
+        # self.__create_assets()
+    
+        # # Clean the reference polygon dataset and generate the sample location centroids
+        # self.__perform_data_formatting()
         
         # Generate and export the model training data
         self.__generate_model_data()
@@ -169,10 +133,14 @@ class GenerateTrainingData():
         reference = ee.FeatureCollection('users/JohnBKilbride/SERVIR/real_time_monitoring/ref_poly_formatted')
         
         # Load in the Sentinel Imagery
-        sentinel = ee.ImageCollection('projects/cemis-camp/assets/Sentinel1') \
+        # sentinel = ee.ImageCollection('projects/cemis-camp/assets/Sentinel1') \
+        #     .filterBounds(reference.geometry().bounds()) \
+        #     .filterMetadata('orbitdirection', 'not_equals', 'ASCENDING') \
+        #     .map(self.__gamma_nought_to_db) \
+        #     .select(['VV','VH'])
+        sentinel = ee.ImageCollection("COPERNICUS/S1_GRD") \
             .filterBounds(reference.geometry().bounds()) \
             .filterMetadata('orbitdirection', 'not_equals', 'ASCENDING') \
-            .map(self.__gamma_nought_to_db) \
             .select(['VV','VH'])
         
         # Load in the points and seperate into the trainin and the test sets
