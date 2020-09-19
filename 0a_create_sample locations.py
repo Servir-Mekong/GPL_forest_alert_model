@@ -216,10 +216,10 @@ class GenerateSamplingGrid():
             
             # Generate the sample point
             sample_point_properties = {
-                'grid_point_id': grid_id_count, 
+                'grid_point_id': id_num, 
                 'grid_x': x, 
                 'grid_y': y, 
-                'partition_id': id_num,
+                'partition_id': partition_id,
                 'partition_x': partition_x,
                 'partition_y': partition_y
                 }
@@ -387,9 +387,9 @@ class GenerateSamplingGrid():
 if __name__ == "__main__":
     
     # Define an arbitrary geometry
-    input_study_area = ee.Geometry.Polygon([[[104.215, 14.073],[104.215, 12.330],[106.126, 12.330],[106.126, 14.073]]], None, False)
-    input_x_cuts = 10
-    input_y_cuts = 10
+    input_study_area = ee.Geometry.Polygon([[[105.1819, 14.0550],[105.1819, 12.3303],[106.11308, 12.3303],[106.1130, 14.0550]]], None, False)
+    input_x_cuts = 5
+    input_y_cuts = 5
     input_num_samples = 4
     input_kernel_size = 256
     input_raster_resolution = 10
