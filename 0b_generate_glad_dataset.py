@@ -210,7 +210,7 @@ class SyntheticAlertGenerator():
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
             .randomColumn(columnName='random', seed=835791) \
-            .sort('random').limit(10)
+            .sort('random').limit(50000)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -549,6 +549,9 @@ class SyntheticAlertGenerator():
         kernel_matrix = ee.List.repeat(kernel_cols, self.kernel_size)
         kernel = ee.Kernel.fixed(self.kernel_size, self.kernel_size, kernel_matrix)
         return kernel
+    
+    def __image_to_int16 (self, image):
+        return ee.Image(image).toInt16()
 
     def __load_formatted_alerts (self):
         """
@@ -570,19 +573,20 @@ class SyntheticAlertGenerator():
         
         # Isolate the 2019 and 2020 alerts
         alerts_2019 = ee.Image(glad_alerts_2019.select(['alertDate19']) \
-            .map(lambda img: ee.Image(img).toInt16()) \
+            .map(self.__image_to_int16) \
             .sort('system:time_start', False) \
             .first())
         alerts_2020 = ee.Image(glad_alerts_2020.select(['alertDate20']) \
-            .map(lambda img: ee.Image(img).toInt16()) \
+            .map(self.__image_to_int16) \
             .sort('system:time_start', False) \
             .first())                  
         
         # Turn the images into a an image collection of day-to-day labels.
-        alert_ts_2018 = self.__create_dummy_alerts(2018, 319, 365)
+        # alert_ts_2018 = self.__create_dummy_alerts(2018, 319, 365)
         alert_ts_2019 = self.__glad_alert_to_collection(alerts_2019, 2019, 'alertDate19')
         alert_ts_2020 = self.__glad_alert_to_collection(alerts_2020, 2020, 'alertDate20')
-        binary_alert_ts = ee.ImageCollection(alert_ts_2018.merge(alert_ts_2019).merge(alert_ts_2020))
+        # binary_alert_ts = ee.ImageCollection(alert_ts_2018.merge(alert_ts_2019).merge(alert_ts_2020))
+        binary_alert_ts = ee.ImageCollection(alert_ts_2019.merge(alert_ts_2020))
         
         return binary_alert_ts
 
@@ -607,7 +611,7 @@ class SyntheticAlertGenerator():
 
         """
         # Create a list of dates
-        days = ee.List.sequence(1, 365)
+        days = ee.List.sequence(0, 364)
         
         # Map over the days to create the alert time-series
         def inner_map (day):
@@ -619,10 +623,11 @@ class SyntheticAlertGenerator():
             img_date = ee.Date.fromYMD(year, 1, 1).advance(day, 'day').millis()
             
             # Get where the alerts are the 
-            julian_alert = glad_alert.select(alert_band_name).gte(day.subtract(self.backward_label_fuzz)) \
-                .And(glad_alert.select(alert_band_name).lte(day.add(self.forward_label_fuzz))) \
+            start = ee.Number.clamp(day.subtract(self.backward_label_fuzz), 1, 365) 
+            stop = ee.Number.clamp(day.add(self.forward_label_fuzz), 1, 365)
+            julian_alert = glad_alert.gte(start).And(glad_alert.lte(stop)) \
                 .set('system:time_start', img_date).rename(['glad_alert_binary'])
-            
+
             return julian_alert.toByte()
         
         return ee.ImageCollection.fromImages(days.map(inner_map))
@@ -767,7 +772,7 @@ class SyntheticAlertGenerator():
             fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
             fileFormat = "TFRecord", 
             )
-        # task.start()
+        task.start()
 
         # Log the info in the exporter
         self.export_monitor.add_task('export_'+str(sample_num), task)
@@ -781,7 +786,7 @@ if __name__ == "__main__":
     input_partitions = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/partitions")
     input_username = 'JohnBKilbride'
     input_projection = ee.Projection('EPSG:32648')
-    input_forward_label_fuzz = 7
+    input_forward_label_fuzz = 10
     input_backward_label_fuzz = 3
     input_kernel_size = 256
     input_gcs_bucket = "kilbride_bucket_1"
@@ -789,7 +794,7 @@ if __name__ == "__main__":
     input_num_sentinel_images = 3
     input_feat_group_export_id = "SERVIR/real_time_monitoring/glad_feature_groups"
     input_glad_label_export_id = "SERVIR/real_time_monitoring/glad_labels"
-    input_output_bands = ['VV','VH','angle']
+    input_output_bands = ['VV','VH']
 
     # Instantiate the object
     alert_generator = SyntheticAlertGenerator(input_sample_locations, input_partitions, input_username, input_projection, input_forward_label_fuzz, 
@@ -798,17 +803,17 @@ if __name__ == "__main__":
                                               input_output_bands)
     
     # Aggregate the sentinel IDs needed for the second stage of processing
-    alert_generator.aggregate_sar_for_alerts()
+    # alert_generator.aggregate_sar_for_alerts()
     
     # Generate the GLAD Labels
-    # alert_generator.generate_glad_labels()
+    alert_generator.generate_glad_labels()
     
     # Export the training dataset to google drive
-    # start_time = datetime.now()
-    # alert_generator.generate_synthetic_alert_dataset()
-    # end_time = datetime.now()
-    # print('')
-    # print('Script time:', end_time - start_time)
+    start_time = datetime.now()
+    alert_generator.generate_synthetic_alert_dataset()
+    end_time = datetime.now()
+    print('')
+    print('Script time:', end_time - start_time)
     
     print('\nProgram completed.')
 
