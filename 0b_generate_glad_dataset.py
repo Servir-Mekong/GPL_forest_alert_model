@@ -208,9 +208,9 @@ class SyntheticAlertGenerator():
         print('\nBeginning alert generation. ')
         
         # Set the attribute of the GLAD alerts
-        self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
-            .randomColumn(columnName='random', seed=835791) \
-            .sort('random').limit(50000)
+        self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id)
+            #.randomColumn(columnName='random', seed=835791) \
+            #.sort('random').limit(50000)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -270,7 +270,7 @@ class SyntheticAlertGenerator():
     def __create_feature_names(self):
         """
         Helper function which formats the names of each of the features that will be exported.
-        Example, if num_sentinel_images == 3 and output bands == ['VV'] then the feature names
+        Example, if self.num_sentinel_images == 3 and self.output_bands == ['VV'] then the feature names
         will return ['VV_1', 'VV_2', 'VV_3'].
 
         Returns
@@ -582,10 +582,8 @@ class SyntheticAlertGenerator():
             .first())                  
         
         # Turn the images into a an image collection of day-to-day labels.
-        # alert_ts_2018 = self.__create_dummy_alerts(2018, 319, 365)
         alert_ts_2019 = self.__glad_alert_to_collection(alerts_2019, 2019, 'alertDate19')
         alert_ts_2020 = self.__glad_alert_to_collection(alerts_2020, 2020, 'alertDate20')
-        # binary_alert_ts = ee.ImageCollection(alert_ts_2018.merge(alert_ts_2019).merge(alert_ts_2020))
         binary_alert_ts = ee.ImageCollection(alert_ts_2019.merge(alert_ts_2020))
         
         return binary_alert_ts
@@ -630,46 +628,6 @@ class SyntheticAlertGenerator():
 
             return julian_alert.toByte()
         
-        return ee.ImageCollection.fromImages(days.map(inner_map))
-    
-    def __create_dummy_alerts (self, year, start_day, end_day):
-        """
-        Generates a time-series of images of constant value. These are intended to pad 
-        time-series of binary alert images at the beginning of the series. All of the 
-        dummy alerts will have a constant value of zero. 
-
-        Parameters
-        ----------
-        year : integer
-            The year of the dummy alerts to be generated.
-        start_day : integer
-            The first julian day for which to generate dummy alerts.
-        end_day : interger
-            The last julian day for which to generate dummy alerts.
-
-        Returns
-        -------
-        ee.ImageCollection
-            A collection of alerts. 
-
-        """
-        # Create a list of dates
-        days = ee.List.sequence(start_day, end_day)
-        
-        # Map over the days to create the alert time-series
-        def inner_map (day):
-        
-            # Cast the day as an ee.Number
-            day = ee.Number(day).toInt16()
-            
-            # Create the date stamp
-            img_date = ee.Date.fromYMD(year, 1, 1).advance(day, 'day').millis()
-            
-            # Get where the alerts are the 
-            julian_alert = ee.Image(0).set('system:time_start', img_date).rename(['glad_alert_binary'])
-            
-            return julian_alert.toByte()
-    
         return ee.ImageCollection.fromImages(days.map(inner_map))
 
     def __retrieve_label (self, alert_date):
@@ -748,9 +706,9 @@ class SyntheticAlertGenerator():
             
         # Convert the list of images to an ee.ImageCollection and select the correct bands
         scenes = ee.ImageCollection.fromImages(scenes).select(self.output_bands)
-        
+               
         # Generate the features
-        features = scenes.toBands().rename(self.model_feature_names)
+        features = scenes.toBands().rename(self.model_feature_names)       
         
         # Load the GLAD Alert for the scene
         label = self.__retrieve_label(alert_date)
@@ -772,6 +730,7 @@ class SyntheticAlertGenerator():
             fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
             fileFormat = "TFRecord", 
             )
+        
         task.start()
 
         # Log the info in the exporter
@@ -781,19 +740,51 @@ class SyntheticAlertGenerator():
 
 if __name__ == "__main__":
     
-    # Define the parameters for the Generator
-    input_sample_locations = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/partition_points")
-    input_partitions = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/partitions")
+    '''
+    Ate -- only the parameters below need to be changed
+    '''
+    
+    # The username associated with the Google Earth Engine account the script will be run on
     input_username = 'JohnBKilbride'
-    input_projection = ee.Projection('EPSG:32648')
-    input_forward_label_fuzz = 10
-    input_backward_label_fuzz = 3
-    input_kernel_size = 256
+    
+    # The Google Cloud Storage bucket to export the data too
     input_gcs_bucket = "kilbride_bucket_1"
+    
+    # The Name of the cloud storage folder to populate with the records
     input_gcs_export_folder = 'test_folder'
+    
+    
+    '''
+    These can stay the same because I have shared the assets from the earlier stages of the script
+    '''
+    # A GEE FeatureCollection of sample points created by the script "0a_create_sample locations.py"
+    input_sample_locations = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/partition_points")
+    
+    # A GEE FeatureCollection containing the sample partitions created by the script "0a_create_sample locations.py"
+    input_partitions = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/partitions")
+    
+    # A projected coordinate system to use for the study area
+    input_projection = ee.Projection('EPSG:32648')
+    
+    # The number of julian days to include after the most recent images' date
+    input_forward_label_fuzz = 3
+    
+    # The number of julian days of GLAD alert records to include before a given images label date
+    input_backward_label_fuzz = 10
+    
+    # The kernel Size
+    input_kernel_size = 256
+
+    # The number if sentinel-1 images to include in the exported feature tensor
     input_num_sentinel_images = 3
+    
+    # The Export ID to assign to the ee.FeatureCollection of GLAD feature groups to export 
     input_feat_group_export_id = "SERVIR/real_time_monitoring/glad_feature_groups"
+    
+    # The Export ID to assign to the ee.FeatureCollection of the GLAD labels to export
     input_glad_label_export_id = "SERVIR/real_time_monitoring/glad_labels"
+    
+    # The bands that will be included in the exported alert recoreds
     input_output_bands = ['VV','VH']
 
     # Instantiate the object
@@ -806,9 +797,9 @@ if __name__ == "__main__":
     # alert_generator.aggregate_sar_for_alerts()
     
     # Generate the GLAD Labels
-    alert_generator.generate_glad_labels()
+    # alert_generator.generate_glad_labels()
     
-    # Export the training dataset to google drive
+    # # Export the training dataset to google drive
     start_time = datetime.now()
     alert_generator.generate_synthetic_alert_dataset()
     end_time = datetime.now()
