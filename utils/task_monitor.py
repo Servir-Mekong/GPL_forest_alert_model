@@ -13,7 +13,14 @@ class GEETaskMonitor():
 
     def add_task(self, task_id, task):
         '''Add a task to the task dictionary'''
-        self.task_dict[str(task_id)] = task
+        
+        # Perform a check -- this will catch tasks that have not been initialized
+        try:
+            state = ee.data.getTaskStatus(task.id)[0]['state']
+        except TypeError:
+            print('TypeError for when checking status of input task -- task not added to monitor')
+        else:
+            self.task_dict[str(task_id)] = task
         return None
      
     def reset_monitor(self):
@@ -48,6 +55,7 @@ class GEETaskMonitor():
         for key, value in self.task_dict.items():
             try:
                 state = ee.data.getTaskStatus(value.id)[0]['state']
+                
                 if state in ['READY', 'RUNNING']:
                     pass
                 else:

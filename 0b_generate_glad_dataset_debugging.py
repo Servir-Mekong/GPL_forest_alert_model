@@ -208,7 +208,7 @@ class SyntheticAlertGenerator():
         
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
-            .randomColumn(columnName='random', seed=5123576) \
+            .randomColumn(columnName='random', seed=835791) \
             .sort('random').limit(1)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
@@ -717,14 +717,22 @@ class SyntheticAlertGenerator():
         # Create the export filename
         file_name = 'alert_record_' + partition_id + '_' + str(sample_num)
         
-        # Initiate the export    
-        task = ee.batch.Export.table.toCloudStorage(
-            collection = ee.FeatureCollection([output]),
-            description = "Export-Mekong-Alert-" + str(sample_num),  
-            bucket = self.gcs_bucket,
-            fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
-            fileFormat = "TFRecord", 
+        # Initiate the export 
+        task = ee.batch.Export.table.toDrive(
+            collection = ee.FeatureCollection([output]), 
+            description = "Export-Mekong-Alert-" + str(sample_num), 
+            folder = 'test_export', 
+            fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name,
+            fileFormat = 'CSV', 
             )
+
+        # task = ee.batch.Export.table.toCloudStorage(
+        #     collection = ee.FeatureCollection([output]),
+        #     description = "Export-Mekong-Alert-" + str(sample_num),  
+        #     bucket = self.gcs_bucket,
+        #     fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
+        #     fileFormat = "TFRecord", 
+        #     )
         
         # Check if the number of output features is correct
         # Number should be: self.model_feature_names + 2
@@ -733,7 +741,8 @@ class SyntheticAlertGenerator():
         
         if target_num_properties == output_num_properties:
             print('Initating '+str(sample_num+1)+' of '+str(num_exports))
-            print(output.first().getInfo())
+            
+            print(output.get('angle_3').getInfo())
             
             # task.start()
         else:
@@ -806,11 +815,11 @@ if __name__ == "__main__":
     # alert_generator.generate_glad_labels()
     
     # Export the training dataset to google drive
-    # start_time = datetime.now()
-    # alert_generator.generate_synthetic_alert_dataset()
-    # end_time = datetime.now()
-    # print('')
-    # print('Script time:', end_time - start_time)
+    start_time = datetime.now()
+    alert_generator.generate_synthetic_alert_dataset()
+    end_time = datetime.now()
+    print('')
+    print('Script time:', end_time - start_time)
     
     alert_generator.model_feature_names
     
