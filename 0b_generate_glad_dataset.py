@@ -209,7 +209,7 @@ class SyntheticAlertGenerator():
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
             .randomColumn(columnName='random', seed=5123576) \
-            .sort('random').limit(1)
+            .sort('random').limit(500)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -304,7 +304,7 @@ class SyntheticAlertGenerator():
             A feature which contains a tensor which can be exported as a TFRecord. 
 
         """
-        stack = ee.Image(stack)
+        stack = ee.Image(stack).toFloat()
         sample_point = ee.Feature(sample_point)
         
         # Select the points with the matching ID
@@ -313,7 +313,7 @@ class SyntheticAlertGenerator():
         # Convert the stack to an array neighborhood
         stack_array = stack.neighborhoodToArray(
             kernel = self.kernel, 
-            defaultValue = -9999
+            defaultValue = 0
             )
         
         # Run the sampling proceedure
@@ -700,16 +700,20 @@ class SyntheticAlertGenerator():
                 alert_date = scene.date()
             
         # Convert the list of images to an ee.ImageCollection and select the correct bands
-        scenes = ee.ImageCollection.fromImages(scenes).select(self.output_bands)
+        scenes = ee.ImageCollection.fromImages(scenes) \
+            .select(self.output_bands) \
+            .sort('system:time_start')
                
         # Generate the features
-        features = scenes.toBands().rename(self.model_feature_names)       
+        features = scenes.toBands().rename(self.model_feature_names) \
+            .unmask(-50) .unitScale(-50, 1)
+
         
         # Load the GLAD Alert for the scene
         label = self.__retrieve_label(alert_date)
         
         # Stack the outputs
-        labels_and_features = ee.Image.cat([features, label])
+        labels_and_features = ee.Image.cat([features, label]).toFloat()
                 
         # Run the sampling
         output = self.__sample_model_data(labels_and_features, sample.geometry())
@@ -724,20 +728,10 @@ class SyntheticAlertGenerator():
             bucket = self.gcs_bucket,
             fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
             fileFormat = "TFRecord", 
-            )
-        
-        # Check if the number of output features is correct
-        # Number should be: self.model_feature_names + 2
-        target_num_properties = len(self.model_feature_names) + 2 
-        output_num_properties = output.propertyNames().length().getInfo()
-        
-        if target_num_properties == output_num_properties:
-            print('Initating '+str(sample_num+1)+' of '+str(num_exports))
-            print(output.first().getInfo())
-            
-            # task.start()
-        else:
-            print('Export for index ' + str(sample_num+1) + ' had too few features.')
+            )        
+
+        print('Initating '+str(sample_num+1)+' of '+str(num_exports))            
+        task.start()
 
         # Log the info in the exporter
         self.export_monitor.add_task('export_'+str(sample_num), task)
@@ -791,7 +785,7 @@ if __name__ == "__main__":
     input_glad_label_export_id = "SERVIR/real_time_monitoring/glad_labels"
     
     # The bands that will be included in the exported alert recoreds
-    input_output_bands = ['VV','VH', 'angle']
+    input_output_bands = ['VV','VH']
 
     # Instantiate the object
     alert_generator = SyntheticAlertGenerator(input_sample_locations, input_partitions, input_username, input_projection, input_forward_label_fuzz, 
@@ -806,13 +800,11 @@ if __name__ == "__main__":
     # alert_generator.generate_glad_labels()
     
     # Export the training dataset to google drive
-    # start_time = datetime.now()
-    # alert_generator.generate_synthetic_alert_dataset()
-    # end_time = datetime.now()
-    # print('')
-    # print('Script time:', end_time - start_time)
-    
-    alert_generator.model_feature_names
+    start_time = datetime.now()
+    alert_generator.generate_synthetic_alert_dataset()
+    end_time = datetime.now()
+    print('')
+    print('Script time:', end_time - start_time)
     
     print('\nProgram completed.')
 
