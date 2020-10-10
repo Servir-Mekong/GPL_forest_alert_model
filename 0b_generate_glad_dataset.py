@@ -209,7 +209,7 @@ class SyntheticAlertGenerator():
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
             .randomColumn(columnName='random', seed=5123576) \
-            .sort('random').limit(500)
+            .sort('random').limit(200)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -728,10 +728,18 @@ class SyntheticAlertGenerator():
             bucket = self.gcs_bucket,
             fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
             fileFormat = "TFRecord", 
-            )        
-
-        print('Initating '+str(sample_num+1)+' of '+str(num_exports))            
-        task.start()
+            )
+        
+        # Check if the number of output features is correct
+        # Number should be: self.model_feature_names + 2
+        target_num_properties = len(self.model_feature_names) + 2 
+        output_num_properties = output.propertyNames().length().getInfo()
+        
+        if target_num_properties == output_num_properties:
+            print('Initating '+str(sample_num+1)+' of '+str(num_exports))            
+            task.start()
+        else:
+            print('Export for index ' + str(sample_num+1) + ' had too few features.')
 
         # Log the info in the exporter
         self.export_monitor.add_task('export_'+str(sample_num), task)
