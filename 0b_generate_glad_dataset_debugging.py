@@ -107,31 +107,36 @@ class SyntheticAlertGenerator():
         print("\nAggregating SAR imagery groups...")
 
         # Assign each of the partitions to the train, validation, or test sets
-        labeled_sample_points = self.__assign_sample_to_set()
-                
-        # Convert the list over each coordinate into the groups needed for creating the dataset
-        sentinel_groups = self.__get_feature_groups(labeled_sample_points)
+        # The labeled_sample_points are used for the final test dataset
+        # The labeled_sample_partitions are used to generate the final training and validation datasets
+        labeled_sample_points, labeled_sample_partitions = self.__assign_sample_to_set()
+        
+        # Perform "targeted sampling" in the training and validation partitions
+        sentinel_groups_partitions = self.__get_feature_groups_paritions(labeled_sample_points)
+        
+        # # Convert the list over each coordinate into the groups needed for creating the dataset
+        # sentinel_groups_points = self.__get_feature_groups_points(labeled_sample_points)
                         
-        # Create the export ID
-        export_asset_id = 'users/' + self.username +'/' + self.feat_group_export_id
+        # # Create the export ID
+        # export_asset_id = 'users/' + self.username +'/' + self.feat_group_export_id
         
-        # Run the export
-        task = ee.batch.Export.table.toAsset(
-            collection = sentinel_groups, 
-            description = 'SERVIR-GPL-RTM-FeatureGroups', 
-            assetId = export_asset_id
-            )
-        task.start()
+        # # Run the export
+        # task = ee.batch.Export.table.toAsset(
+        #     collection = sentinel_groups, 
+        #     description = 'SERVIR-GPL-RTM-FeatureGroups', 
+        #     assetId = export_asset_id
+        #     )
+        # task.start()
         
-        # Add the task to the task monitor and wait until export completes
-        print('\nExporting the Sentinel ID feature groups.')
-        self.export_monitor.add_task('generate_feature_groups', task)
-        self.export_monitor.monitor_tasks()
-        print('...export completed.')
+        # # Add the task to the task monitor and wait until export completes
+        # print('\nExporting the Sentinel ID feature groups.')
+        # self.export_monitor.add_task('generate_feature_groups', task)
+        # self.export_monitor.monitor_tasks()
+        # print('...export completed.')
         
-        # Load and set the sample groups as a class attribute
-        self.sample_id_groups = ee.FeatureCollection(export_asset_id)
-        self.export_monitor.reset_monitor()
+        # # Load and set the sample groups as a class attribute
+        # self.sample_id_groups = ee.FeatureCollection(export_asset_id)
+        # self.export_monitor.reset_monitor()
         
         return None
     
@@ -361,28 +366,35 @@ class SyntheticAlertGenerator():
             .aggregate_array('partition_id')
     
         # Assign each sample to one of the partitions
-        train_points = self.sample_locations.filter(ee.Filter.inList('partition_id', train_set_ids))
-        val_points = self.sample_locations.filter(ee.Filter.inList('partition_id', val_set_ids))
         test_points = self.sample_locations.filter(ee.Filter.inList('partition_id', test_set_ids))
         
         # Recombine all of the points into a single set
-        train_points = self.__add_model_set_labels(train_points, "train")
-        val_points = self.__add_model_set_labels(val_points, "validation")
         test_points = self.__add_model_set_labels(test_points, "test")
         
         # Recombine the points into a single dataset
-        labeled_points = ee.FeatureCollection(train_points.merge(val_points).merge(test_points))
+        # Note: Due to the sparsity of disturbances -- we've decided to only use the grid sampling stratedgy
+        # for points in the test set
+        labeled_points = ee.FeatureCollection(test_points)
         
-        return labeled_points
+        # Isolate and label the training and validation partitions
+        train_partitions = self.partitions.filter(ee.Filter.inList('partition_id', train_set_ids))
+        train_partitions = self.__add_model_set_labels(train_partitions, "train")
+        val_partitions = self.partitions.filter(ee.Filter.inList('partition_id', val_set_ids))
+        val_partitions = self.__add_model_set_labels(val_partitions, "validation")
+        
+        # Combine the labeled partitions
+        labeled_partitions = ee.FeatureCollection(train_partitions.merge(val_partitions))
+        
+        return labeled_points, labeled_partitions
     
-    def __add_model_set_labels(self, input_points, model_label):
+    def __add_model_set_labels(self, input_features, model_label):
         """
         Assigns a property called 'model_set' to each ee.Feature in the input 
         ee.FeatureCollection.
 
         Parameters
         ----------
-        input_points : ee.FeatureCollection
+        input_features : ee.FeatureCollection
             A feature collection of points which will be assigned a lable: train,
             validation, or test.
         model_label : string
@@ -397,9 +409,221 @@ class SyntheticAlertGenerator():
         """
         def inner_map (point):
             return ee.Feature(point).set('model_set', model_label)
-        return input_points.map(inner_map) 
+        return input_features.map(inner_map) 
+
+    def __get_feature_groups_partitions(self, input_sample_partitions):
+        """
+        Main logic for aggreagating the feature groups. Here, a feature group 
+        describes the list of Sentinel-1 IDs which will be used to create a feature
+        tensor used by a semantic segmentation algorithm. 
+
+        Returns
+        -------
+        ee.FeatureCollection
+            A collection where each feature contains two properties: 1. a string
+            representation of an ee.List which contains the Sentinl-1 system:id
+            values needed to create a particular record in the alert dataset and 2.
+            the partition_id of the sample (which is needed for spatial stratification).
+
+        """
+        
+        # Load the GLAD Alerts for 2019 and 2020
+        glad_2019, glad_2020 = self.__load_glad_alerts_for_partition()
+     
+        # Iterate over each of the paritions
+        def iterate_over_paritions (partition) :
+            
+            # Cast the partition
+            partition = ee.Feature(partition)
+            
+            # Extract several properties from the partition feature
+            partition_geometry = partition.geometry()
+            partition_model_id = ee.String(partition.get('model_set'))
+            
+            # Run a stratified random sample of the GLAD alerts using the partition geometry
+            samples_2019 = glad_2019.stratifiedSample(
+                numPoints = 1, 
+                classBand = "alert_sampling", 
+                region = partition_geometry, 
+                scale = 10, 
+                classValues = [0, 1], 
+                classPoints = [0, 100], 
+                dropNulls = True, 
+                tileScale = 4, 
+                geometries = True
+                )
+            samples_2020 = glad_2020.stratifiedSample(
+                numPoints = 1, 
+                classBand = "alert_sampling", 
+                region = partition_geometry, 
+                scale = 10, 
+                classValues = [0, 1], 
+                classPoints = [0, 100], 
+                dropNulls = True, 
+                tileScale = 4, 
+                geometries = True
+                )
+        
+            #
+            
+            return 
+        
+        return None
+
+    def __load_glad_alerts_for_partition (self):
+        '''
+        Loads the GLAD alerts required for the study area. Values of the returned images
+        ranges between 1 - 365 (which corresponds to the julian day of the first instance of the detected alert)
+
+        Returns
+        -------
+        alerts_2019 : ee.Image
+            DESCRIPTION.
+        alerts_2020 : ee.Image
+            DESCRIPTION.
+
+        '''
+        # Load in the GLAD forest alerts
+        # Information: http:#glad-forest-alert.appspot.com/
+        glad_alerts_2019 = ee.ImageCollection('projects/glad/alert/2019final').filterBounds(self.study_area)
+        glad_alerts_2020 = ee.ImageCollection('projects/glad/alert/UpdResult').filterBounds(self.study_area)
+        
+        # Isolate the 2019 and 2020 alerts
+        alerts_2019 = ee.Image(glad_alerts_2019.select(['alertDate19']) \
+            .sort('system:time_start', False) \
+            .rename(['julian_day']) \
+            .first()).toInt16()
+        alerts_2020 = ee.Image(glad_alerts_2020.select(['alertDate20']) \
+            .sort('system:time_start', False) \
+            .rename(['julian_day']) \
+            .first()).toInt16()       
+        
+        # Compute and add a binary band to each of the images
+        alerts_2019_binary = alerts_2019.gt(0).rename('alert_sampling')
+        alerts_2020_binary = alerts_2020.gt(0).rename('alert_sampling')
+        alerts_2019 = alerts_2019.addBands(alerts_2019_binary)
+        alerts_2020 = alerts_2020.addBands(alerts_2020_binary)
+            
+        return alerts_2019, alerts_2020
     
-    def __get_feature_groups (self, input_sample_locations):
+    def __add_year_partition_samples(self):
+        '''
+        
+
+        Returns
+        -------
+        None.
+
+        '''
+        return None
+
+    def __get_feature_groups_partitions(self, input_sample_partitions):
+        """
+        Main logic for aggreagating the feature groups. Here, a feature group 
+        describes the list of Sentinel-1 IDs which will be used to create a feature
+        tensor used by a semantic segmentation algorithm. 
+
+        Returns
+        -------
+        ee.FeatureCollection
+            A collection where each feature contains two properties: 1. a string
+            representation of an ee.List which contains the Sentinl-1 system:id
+            values needed to create a particular record in the alert dataset and 2.
+            the partition_id of the sample (which is needed for spatial stratification).
+
+        """
+        
+        # Load the GLAD Alerts for 2019 and 2020
+        glad_2019, glad_2020 = self.__load_glad_alerts_for_partition()
+     
+        # Iterate over each of the paritions
+        def iterate_over_paritions (partition) :
+            
+            # Cast the partition
+            partition = ee.Feature(partition)
+            
+            # Extract several properties from the partition feature
+            partition_geometry = partition.geometry()
+            partition_model_id = ee.String(partition.get('model_set'))
+            
+            # Run a stratified random sample of the GLAD alerts using the partition geometry
+            samples_2019 = glad_2019.stratifiedSample(
+                numPoints = 1, 
+                classBand = "alert_sampling", 
+                region = partition_geometry, 
+                scale = 10, 
+                classValues = [0, 1], 
+                classPoints = [0, 5000], 
+                dropNulls = True, 
+                tileScale = 4, 
+                geometries = True
+                )
+            samples_2020 = glad_2020.stratifiedSample(
+                numPoints = 1, 
+                classBand = "alert_sampling", 
+                region = partition_geometry, 
+                scale = 10, 
+                classValues = [0, 1], 
+                classPoints = [0, 5000], 
+                dropNulls = True, 
+                tileScale = 4, 
+                geometries = True
+                )
+        
+            #
+            
+            return 
+        
+        return None
+
+    def __load_glad_alerts_for_partition (self):
+        '''
+        Loads the GLAD alerts required for the study area. Values of the returned images
+        ranges between 1 - 365 (which corresponds to the julian day of the first instance of the detected alert)
+
+        Returns
+        -------
+        alerts_2019 : ee.Image
+            DESCRIPTION.
+        alerts_2020 : ee.Image
+            DESCRIPTION.
+
+        '''
+        # Load in the GLAD forest alerts
+        # Information: http:#glad-forest-alert.appspot.com/
+        glad_alerts_2019 = ee.ImageCollection('projects/glad/alert/2019final').filterBounds(self.study_area)
+        glad_alerts_2020 = ee.ImageCollection('projects/glad/alert/UpdResult').filterBounds(self.study_area)
+        
+        # Isolate the 2019 and 2020 alerts
+        alerts_2019 = ee.Image(glad_alerts_2019.select(['alertDate19']) \
+            .sort('system:time_start', False) \
+            .rename(['julian_day']) \
+            .first()).toInt16()
+        alerts_2020 = ee.Image(glad_alerts_2020.select(['alertDate20']) \
+            .sort('system:time_start', False) \
+            .rename(['julian_day']) \
+            .first()).toInt16()       
+        
+        # Compute and add a binary band to each of the images
+        alerts_2019_binary = alerts_2019.gt(0).rename('alert_sampling')
+        alerts_2020_binary = alerts_2020.gt(0).rename('alert_sampling')
+        alerts_2019 = alerts_2019.addBands(alerts_2019_binary)
+        alerts_2020 = alerts_2020.addBands(alerts_2020_binary)
+            
+        return alerts_2019, alerts_2020
+    
+    def __add_year_partition_samples(self):
+        '''
+        
+
+        Returns
+        -------
+        None.
+
+        '''
+        return None
+    
+    def __get_feature_groups_points (self, input_sample_locations):
         """
         Main logic for aggreagating the feature groups. Here, a feature group 
         describes the list of Sentinel-1 IDs which will be used to create a feature
@@ -809,19 +1033,20 @@ if __name__ == "__main__":
                                               input_output_bands)
     
     # Aggregate the sentinel IDs needed for the second stage of processing
-    # alert_generator.aggregate_sar_for_alerts()
+    alert_generator.aggregate_sar_for_alerts()
+    
+    
     
     # Generate the GLAD Labels
     # alert_generator.generate_glad_labels()
     
-    # Export the training dataset to google drive
-    start_time = datetime.now()
-    alert_generator.generate_synthetic_alert_dataset()
-    end_time = datetime.now()
-    print('')
-    print('Script time:', end_time - start_time)
-    
-    alert_generator.model_feature_names
+    # # Export the training dataset to google drive
+    # start_time = datetime.now()
+    # alert_generator.generate_synthetic_alert_dataset()
+    # end_time = datetime.now()
+    # print('')
+    # print('Script time:', end_time - start_time)
+
     
     print('\nProgram completed.')
 

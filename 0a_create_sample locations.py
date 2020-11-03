@@ -387,7 +387,7 @@ class GenerateSamplingGrid():
 if __name__ == "__main__":
     
     # Define an arbitrary geometry
-    input_study_area = ee.Geometry.Polygon([[[105.1819, 14.0550],[105.1819, 12.3303],[106.11308, 12.3303],[106.1130, 14.0550]]], None, False)
+    input_study_area = ee.Geometry.Polygon([[[104.0311, 14.3134],[104.0311, 12.5128],[106.0416, 12.5128],[106.0416, 14.3134]]], None, False)
     input_x_cuts = 5
     input_y_cuts = 5
     input_num_samples = 4
