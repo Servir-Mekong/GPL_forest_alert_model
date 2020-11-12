@@ -192,7 +192,7 @@ class SyntheticAlertGenerator():
             task.start()
             
             # Log the export to the export monitor
-            self.export_monitor.add_task('glad_label_'+str(i+1), task)          
+            self.export_monitor.add_task('glad_label_'+str(i+1), task)         
         
         # Run the monitoring of the exports
         self.export_monitor.monitor_tasks()
@@ -239,6 +239,8 @@ class SyntheticAlertGenerator():
             # Check for completed exports every 250 iterations
             if  i % 250 == 0:
                 self.__check_for_monitor_capacity()
+                
+            break
             
         # Run the monitoring of the exports
         self.export_monitor.monitor_tasks()
@@ -813,7 +815,7 @@ class SyntheticAlertGenerator():
         combined_alerts = ee.Image.cat([alerts_2019, alerts_2020])
             
         # Turn the images into a an image collection of day-to-day labels.
-        binary_alert_ts = self.__glad_alert_to_collection(combined_alerts, 2019, 'alertDate19')
+        binary_alert_ts = self.__glad_alert_to_collection(combined_alerts)
         
         return ee.ImageCollection(binary_alert_ts)
 
@@ -846,8 +848,8 @@ class SyntheticAlertGenerator():
             img_date = ee.Date.fromYMD(2019, 1, 1).advance(day, 'day').millis()
             
             # Get where the alerts are the 
-            start = ee.Number.clamp(day.subtract(10), 1, 730)
-            stop = ee.Number.clamp(day.add(3), 1, 730)
+            start = ee.Number.clamp(day.subtract(self.backward_label_fuzz), 1, 730)
+            stop = ee.Number.clamp(day.add(self.forward_label_fuzz), 1, 730)
             julian_alert = combined_alerts.gte(start).And(combined_alerts.lte(stop)) \
                 .reduce(ee.Reducer.sum()).gte(1) \
                 .set('system:time_start', img_date).rename(['glad_alert_binary'])
@@ -943,6 +945,7 @@ class SyntheticAlertGenerator():
 
         
         # Load the GLAD Alert for the scene
+        print(alert_date.get('year').getInfo(), alert_date.get('month').getInfo(), alert_date.get('day').getInfo())
         label = self.__retrieve_label(alert_date)
         
         # Stack the outputs
@@ -1009,13 +1012,13 @@ if __name__ == "__main__":
     input_projection = ee.Projection('EPSG:32648')
     
     # The number of julian days to include after the most recent images' date
-    input_forward_label_fuzz = 3
+    input_forward_label_fuzz = 8
     
     # The number of julian days of GLAD alert records to include before a given images label date
-    input_backward_label_fuzz = 10
+    input_backward_label_fuzz = 36
     
     # The kernel Size
-    input_kernel_size = 256
+    input_kernel_size = 3
 
     # The number if sentinel-1 images to include in the exported feature tensor
     input_num_sentinel_images = 3
@@ -1038,15 +1041,15 @@ if __name__ == "__main__":
     # # Aggregate the sentinel IDs needed for the second stage of processing
     # alert_generator.aggregate_sar_for_alerts()
     
-    # # Generate the GLAD Labels
-    # # alert_generator.generate_glad_labels()
+    # Generate the GLAD Labels
+    alert_generator.generate_glad_labels()
     
     # Export the training dataset to google drive
-    start_time = datetime.now()
-    alert_generator.generate_synthetic_alert_dataset()
-    end_time = datetime.now()
-    print('')
-    print('Script time:', end_time - start_time)
+    # start_time = datetime.now()
+    # alert_generator.generate_synthetic_alert_dataset()
+    # end_time = datetime.now()
+    # print('')
+    # print('Script time:', end_time - start_time)
     
     print('\nProgram completed.')
 
