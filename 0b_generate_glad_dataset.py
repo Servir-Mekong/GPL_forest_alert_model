@@ -218,7 +218,7 @@ class SyntheticAlertGenerator():
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
             .randomColumn(columnName='random', seed=5123576) \
-            .sort('random').limit(5000)
+            .sort('random').limit(1000)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -228,7 +228,7 @@ class SyntheticAlertGenerator():
         print('\nBeginning export process:')
         sample_group_list = self.sample_id_groups.toList(1e7).getInfo()
         num_exports = self.sample_id_groups.size().getInfo()
-        for i in range(200, num_exports):
+        for i in range(0, num_exports):
         
             # Get the feature
             feature = ee.Feature(sample_group_list[i])
@@ -239,8 +239,6 @@ class SyntheticAlertGenerator():
             # Check for completed exports every 250 iterations
             if  i % 250 == 0:
                 self.__check_for_monitor_capacity()
-                
-            break
             
         # Run the monitoring of the exports
         self.export_monitor.monitor_tasks()
@@ -945,7 +943,7 @@ class SyntheticAlertGenerator():
 
         
         # Load the GLAD Alert for the scene
-        print(alert_date.get('year').getInfo(), alert_date.get('month').getInfo(), alert_date.get('day').getInfo())
+        # print(alert_date.get('year').getInfo(), alert_date.get('month').getInfo(), alert_date.get('day').getInfo())
         label = self.__retrieve_label(alert_date)
         
         # Stack the outputs
@@ -957,6 +955,8 @@ class SyntheticAlertGenerator():
         # Create the export filename
         # file_name = 'alert_record_' + partition_id + '_' + str(sample_num)
         file_name = 'alert_record_' + str(sample_num)
+        
+        # print(output.getInfo())
         
         # Initiate the export    
         task = ee.batch.Export.table.toCloudStorage(
@@ -1018,7 +1018,7 @@ if __name__ == "__main__":
     input_backward_label_fuzz = 36
     
     # The kernel Size
-    input_kernel_size = 3
+    input_kernel_size = 256
 
     # The number if sentinel-1 images to include in the exported feature tensor
     input_num_sentinel_images = 3
@@ -1041,15 +1041,15 @@ if __name__ == "__main__":
     # # Aggregate the sentinel IDs needed for the second stage of processing
     # alert_generator.aggregate_sar_for_alerts()
     
-    # Generate the GLAD Labels
-    alert_generator.generate_glad_labels()
+    # # Generate the GLAD Labels
+    # alert_generator.generate_glad_labels()
     
     # Export the training dataset to google drive
-    # start_time = datetime.now()
-    # alert_generator.generate_synthetic_alert_dataset()
-    # end_time = datetime.now()
-    # print('')
-    # print('Script time:', end_time - start_time)
+    start_time = datetime.now()
+    alert_generator.generate_synthetic_alert_dataset()
+    end_time = datetime.now()
+    print('')
+    print('Script time:', end_time - start_time)
     
     print('\nProgram completed.')
 
