@@ -78,11 +78,11 @@ def add_start_date (sample_points):
         
         # Construct the alert date as an ee.Date object
         glad_alert_date = ee.Date.fromYMD(ee.Number(alert_year), 1, 1) \
-            .advance(ee.Number(alert_day).subtract(1), 'day')
+            .advance(ee.Number(alert_day), 'day')
         
         # Get the start date
-        start_day = ee.Number(glad_alert_date.getRelative('day', 'year'))
-        start_year = ee.Number(glad_alert_date.get('year'))
+        start_day = ee.Number(glad_alert_date.advance(-40, 'day').getRelative('day', 'year'))
+        start_year = ee.Number(glad_alert_date.advance(-40, 'day').get('year'))
         
         # Append the sampled values to the original feature
         output = sample_point.set({
