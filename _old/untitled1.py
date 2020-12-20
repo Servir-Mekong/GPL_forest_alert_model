@@ -1,251 +1,217 @@
 import ee
 
 ee.Initialize()
- 
-''' 
-Notes:
-Before going hog-wild, just do the whole process for 1 points
 
-Program inputs:
---num_days_accum_backward (int):
---num_days_accum_forward  (int):
---
-
-# To do:
-# Change how the nested loop work and turn it into 2 loops --> one to get a list of all of the values needed (maybe compute the label too)
-# Then run the export in a seperate step. 
-
-''' 
-
-class ExportAlertDataset
-
-
-def main ():
-
-    # Define the projection, the export location (google drive)
-    forward_label_fuzz = 7
-    backward_label_fuzz = 7
-    kernel_size = 256
-    export_folder = 'SERVIR_alert_data'
+class GenerateSamplingGrid():
+    '''
+    Author: John Kilbride - john.b.kilbride@gmail.com
     
-    # Things that will become parametesr later
-    sample_groups = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/feature_groups") \
-        .map(id_list_to_string) \
-        .limit(10)
-    num_features = sample_groups.size().getInfo()
-    print('Num exports:', num_features)
+    Description: 
     
-    # Get the bounds of the area with 
-    study_area = sample_groups.geometry().bounds()
+    The output sample size will approximately be x_cuts * y_cuts * input_num_samples * 8. As num samples increases
+    the accuracy of the approximation will improve. This is due to rounding that occurs when laying out a grid 
+    that fits in the partition. 
     
-    # Load the GLAD Alerts
-    glad_alerts = load_formatted_alerts(study_area)
     
-    # Load the Sentinel 1 GRD dataset
-    sentinel = ee.ImageCollection("COPERNICUS/S1_GRD") \
-        .filterBounds(study_area) \
-        .filterMetadata('orbitProperties_pass', 'equals', 'DESCENDING') \
-        .filterDate('2018-01-01', '2019-12-31') \
-        .select(['VV','VH'])
+    Parameters [name (type): description]:
+    study_area (geometry): An ee.Geometry of the target area. The bounds will be uses. 
+    x_cut (int): The number of splits perpendicular to the x-axis (vertical splits).
+    y_cuts (int): The number of splits perpendicular to the y-axis (vertical splits). 
+    num_samples (int): The target number of outputs, not because of the tiling scheme I used, you may not get exactly that many
+    sample points. Fixing this will take forever so let's just all agree to use what it outputs!
+    feature_size (int): the size of the FCNN input width and height (e.g., 64, 265)
+    raster_resolution (int): The spatial resolution (meters) of the satellite inputs.
+    projection (ee.Projection): A projected coordinate system to use (use "feet" at your own risk). 
     
-    # Load the kernel
-    kernel = create_kernel(kernel_size)
+    Outputs: 
+    partitions (ee.FeatureCollection):
+    sample_locations (ee.FeatureCollection): Total sample s
     
-    # Load the features
-    feature_names = ["VV_1","VH_1","VV_2","VH_2","VV_3","VH_3"]
+    '''
     
-    # Loop over the features
-    sample_group_list = sample_groups.toList(1e7)
-    for i in range(0, num_features):
-    
-        # Get the feature
-        feature = ee.Feature(sample_group_list.get(i))
+    def __init__(self, study_area, x_cuts, y_cuts, target_sample_size, kernel_size, raster_resolution, projection, asset_directory):
         
-        # Run the sampling and export the feature export
-        export_dataset_sample(feature, i, sentinel, glad_alerts, forward_label_fuzz, backward_label_fuzz, kernel, feature_names, export_folder)
+        self.study_area = study_area
+        self.x_cuts = x_cuts
+        self.y_cuts = y_cuts
+        self.target_sample_size = target_sample_size
+        self.kernel_size = kernel_size
+        self.raster_resolution = raster_resolution
+        self.projection = projection
+        self.asset_directory = asset_directory
         
-    return None
+        return None
 
-
-# Convert the string list into a list
-def id_list_to_string (feature):
-
-    # Cast the feature
-    feature = ee.Feature(feature)
-    
-    # Get the list of strings and disucss
-    id_list = ee.String(feature.get('ordered_sentinel_ids')).replace("\\[","","g").replace("\\]","","g").split(',')
-    
-    return feature.set('id_list', id_list)
-
-# Generate the kernel
-def create_kernel (kernel_size):
-    kernel_cols = ee.List.repeat(1, kernel_size)
-    kernel_matrix = ee.List.repeat(kernel_cols, kernel_size)
-    kernel = ee.Kernel.fixed(kernel_size, kernel_size, kernel_matrix)
-    return kernel
-
-# Main logic of the script
-def load_formatted_alerts (study_area):
-
-    # Load in the GLAD forest alerts
-    # Information: http:#glad-forest-alert.appspot.com/
-    glad_alerts = ee.ImageCollection('projects/glad/alert/2019final').filterBounds(study_area)
-    
-    # Isolate the 2019 and 2020 alerts
-    alerts_2019 = ee.Image(glad_alerts.select(['conf19','alertDate19']) \
-        .map(lambda img: ee.Image(img).toInt16()) \
-        .sort('system:time_start', False) \
-        .first()).select(['alertDate19'])
-    
-    # Turn the images into a an image collection of day-to-day labels.
-    alert_ts_2018 = create_dummy_alerts(2018)
-    alert_ts_2019 = glad_alert_to_collection(alerts_2019, 2019, 'alertDate19')
-    binary_alert_ts = ee.ImageCollection(alert_ts_2018.merge(alert_ts_2019))
-    
-    return binary_alert_ts
-
-
-#  Turn the single-image GLAD alert dates intoa  time-series of 365 binary masks
-def glad_alert_to_collection (glad_alert, year, alert_band_name):
-    
-    # Create a list of dates
-    days = ee.List.sequence(1, 365)
-    
-    # Map over the days to create the alert time-series
-    def inner_map (day):
-    
-        # Cast the day as an ee.Number
-        day = ee.Number(day).toInt16()
+    # Contains the main logic of the script
+    def generate_sample_grid (self):
         
-        # Create the date stamp
-        img_date = ee.Date.fromYMD(year, 1, 1).advance(day, 'day').millis()
+        print('Generating samples...')
         
-        # Get where the alerts are the 
-        julian_alert = glad_alert.select(alert_band_name).eq(day).set('system:time_start', img_date) \
-            .rename(['glad_alert_binary'])
+        # Project the geometry into the target projection
+        bounding_box = self.study_area.bounds(ee.ErrorMargin(1, 'projected'), self.projection) \
+            .transform(self.projection) \
+            .bounds(ee.ErrorMargin(1, 'projected'), self.projection)
         
-        return julian_alert.toByte()
-
-
-    return ee.ImageCollection.fromImages(days.map(inner_map))
-
-#  Create a series of all zero binary masks
-def create_dummy_alerts (year):
-
-    # Create a list of dates
-    days = ee.List.sequence(1, 365)
-    
-    # Map over the days to create the alert time-series
-    def inner_map (day):
-    
-        # Cast the day as an ee.Number
-        day = ee.Number(day).toInt16()
+        # Get the bounding box partitions
+        partitions = self.__partition_bounding_box(bounding_box)
         
-        # Create the date stamp
-        img_date = ee.Date.fromYMD(year, 1, 1).advance(day, 'day').millis()
+        # Export all of the various ee.FeatureCollesctions to the input asset directory
+        self.__export_compute_feature_collections(partitions, sample_points, sample_tiles)
+        print('Output number of Samples:', sample_points.size().getInfo())
         
-        # Get where the alerts are the 
-        julian_alert = ee.Image(0).set('system:time_start', img_date) \
-            .rename(['glad_alert_binary'])
+        return None
+
+    # Divide the geometry into pieces
+    def __partition_bounding_box (self, box):
         
-        return julian_alert.toByte()
-    
-    return ee.ImageCollection.fromImages(days.map(inner_map))
-
-# Convert GLAD alert into a binary
-def glad_to_label (glad_alerts, alert_date, fuzz_forward, fuzz_backward):
-
-    # Fuzz the start and the end_date
-    start_date_fuzz = alert_date.advance(-1 * fuzz_backward, 'day')
-    end_date_fuzz = alert_date.advance(fuzz_forward, 'day')
-    
-    # Create the label from the glad_inputs and the fuzzed dates
-    label = glad_alerts.filterDate(start_date_fuzz, end_date_fuzz).max().rename(['glad_alert'])
-    
-    return label
-
-# Sample the model data
-def sample_model_data (stack, kernel, sample_point):
-
-    # Select the points with the matching ID
-    sample_points = ee.FeatureCollection([sample_point])
-    
-    # Convert the stack to an array neighborhood
-    stack_array = stack.neighborhoodToArray(
-        kernel = kernel, 
-        defaultValue = 0
-        )
-    
-    # Run the sampling proceedure
-    samples = stack_array.reduceRegions(
-        collection = sample_points, 
-        reducer = ee.Reducer.first(), 
-        scale = 25, 
-        tileScale = 1
-        )
-    
-    return ee.Feature(samples.first())
-
-
-# Function exports an individual sample to goolgle drive as a TFRecord,. Thesse can be combined as a TensorFlow Dataset
-def export_dataset_sample (sample, sample_num, sentinel_images, glad_alerts, fuzz_forward, fuzz_backward, kernel, feature_names,
-export_folder_name):
-
-    # Cast the sample
-    sample = ee.Feature(sample)
-    
-    # Get all of the info needed for export
-    sample_ids = ee.List(sample.get("id_list")).getInfo()
-    
-    # Get the alert date
-    alert_date = ee.Date(sample.get('system:time_start'))
-    
-    # Construct the GLAD Alert for the scene
-    label = glad_to_label(glad_alerts, alert_date, fuzz_forward, fuzz_backward)
-    
-    # Convert the IDs to images
-    scenes = []
-    for i in range(0, len(sample_ids)):
+        # Compute the erosion distance to shrink the partitions
+        erosion_dist =  self.kernel_size * self.raster_resolution
         
-        # Get the id from the list of ids
-        scene = ee.Image("COPERNICUS/S1_GRD/"+sample_ids[i])
+        # Get the necessary coordinates from the bounding box
+        coords = ee.Array(box.coordinates())
         
-        # Append the scene to the list
-        scenes.append(scene)
+        # Assign the coordinates to each corner
+        xy_0_0 = ee.Geometry.Point(coords.slice(1,0,1).reshape([-1]).toList(), self.projection)
+        xy_1_1 = ee.Geometry.Point(coords.slice(1,2,3).reshape([-1]).toList(), self.projection)
+        
+        # Get the distance between The LLH corner and the URH corner
+        delta_x_y = ee.Array(xy_1_1.coordinates()).subtract(ee.Array(xy_0_0.coordinates()))
+        delta_x = delta_x_y.get([0]).divide(self.x_cuts)
+        delta_y = delta_x_y.get([1]).divide(self.y_cuts)
+        
+        # Create a feature collection of all of the verticies 
+        # Loop throuhg the y coordinates in the outer loop and
+        # loop through the x coordinates in the inner loop
+        xy_pairs = []
+        for y in range(0, self.y_cuts+1):
+            for x in range(0, self.x_cuts+1):
+                xy_pairs.append([x,y])
+        
+        # Convert the xy pairs into points
+        # Note the function requires scope considerations...
+        def xy_to_points (pair):
+            
+            # Get the x and y values
+            x_coord = ee.Number(ee.List(pair).get(0))
+            y_coord = ee.Number(ee.List(pair).get(1))
+            
+            # Translate the origin to obtain the new point
+            x_translate = delta_x.multiply(x_coord).multiply(-1)
+            y_translate = delta_y.multiply(y_coord).multiply(-1)
+            translate_prj = self.projection.translate(x_translate, y_translate)
+            point_geo = ee.Geometry.Point(xy_0_0.transform(translate_prj).coordinates(), self.projection)
+            
+            # Create the new feature that needs to be exported
+            feature = ee.Feature(point_geo, {'grid_x':x_coord, 'grid_y':y_coord})
+            
+            return feature
+        
+        # Turn the client-side list of xy-pairs into a FeatureCollection of points
+        grid_vertices = ee.FeatureCollection(ee.List(xy_pairs).map(xy_to_points))
+        
+        # Create a list of the starting vertices from which to generate the partitions
+        partition_pairs = []
+        partition_id = 0
+        for y in range(0, self.y_cuts):
+            for x in range(0, self.x_cuts):
+                partition_pairs.append([x, y, partition_id])
+                partition_id += 1  
+        
+        # Create the partions from the partitions pairs lists
+        def partitions_pairs_to_partitions (pair):
+        
+            # Get the parameters from the input array
+            x_coord = ee.Number(ee.List(pair).get(0)).toInt16()
+            y_coord = ee.Number(ee.List(pair).get(1)).toInt16()
+            id_str = ee.Number(ee.List(pair).get(2)).toInt16()
+            
+            # Retrieve the 4 verticies needed
+            llh = ee.Feature(grid_vertices.filterMetadata('grid_x', 'equals', x_coord) \
+                .filterMetadata('grid_y', 'equals', y_coord).first()).geometry()
+            lrh = ee.Feature(grid_vertices.filterMetadata('grid_x', 'equals', x_coord.add(1)) \
+                .filterMetadata('grid_y', 'equals', y_coord).first()).geometry()
+            urh = ee.Feature(grid_vertices.filterMetadata('grid_x', 'equals', x_coord.add(1)) \
+                .filterMetadata('grid_y', 'equals', y_coord.add(1)).first()).geometry()
+            ulh = ee.Feature(grid_vertices.filterMetadata('grid_x', 'equals', x_coord) \
+                .filterMetadata('grid_y', 'equals', y_coord.add(1)).first()).geometry()
+            
+            # Convert into a geometry
+            partition_geo = ee.Geometry.Polygon([[llh.coordinates(), lrh.coordinates(), urh.coordinates(), ulh.coordinates()]], self.projection, False)
+            
+            # Append the feature to the output
+            partition = ee.Feature(partition_geo, {'partition_id':id_str, 'partition_x':x_coord, 'partition_y':y_coord})
+            
+            return partition
+        
+        partitions = ee.FeatureCollection(ee.List(partition_pairs).map(partitions_pairs_to_partitions))
+        
+        return partitions
     
-    scenes = ee.ImageCollection.fromImages(scenes).select(["VV","VH"])
+    def __compute_grid_constants (self, sample_partition, num_samples, prj):
+        '''
+        Compute the constants needed in the process of the grid generation.
+        '''
+        # For now just get one partition
+        partition = ee.Feature(sample_partition)
+        
+        # Get the necessary coordinates from the partition
+        coords = ee.Array(partition.geometry().coordinates())
+        
+        # Assign the coordinates to each corner
+        xy_0_0 = ee.Geometry.Point(coords.slice(1,0,1).reshape([-1]).toList(), prj)
+        xy_1_1 = ee.Geometry.Point(coords.slice(1,2,3).reshape([-1]).toList(), prj)
+        
+        # Get the distance between The LLH corner and the URH corner
+        delta_x_y = ee.Array(xy_1_1.coordinates()).subtract(ee.Array(xy_0_0.coordinates()))
+        width = delta_x_y.get([0])
+        height = delta_x_y.get([1])
+        
+        # Compute number of columns (nx) and the number of rows (ny)
+        nx = self.__calculate_sample_points_x(width, height, num_samples)
+        ny = ee.Number(num_samples).divide(nx)
+        
+        # Round the two values
+        nx = nx.round().getInfo()
+        ny = ny.round().getInfo()
+        
+        return [width, height, nx, ny]
+    # Run the export functions
+    def __export_compute_feature_collections(self, partitions):
     
-    # Generate the features
-    features = scenes.toBands().rename(feature_names)
-    
-    # Stack the outputs
-    labels_and_features = ee.Image.cat([features, label])
-    
-    # Run the sampling
-    output = sample_model_data(labels_and_features, kernel, sample.geometry())
-    
-    # Create the export filename
-    file_name = 'alert_record_'
-    
-    # Initiate the export
-    task = ee.batch.Export.table.toDrive(
-        collection =  ee.FeatureCollection([output]), 
-        description =  "Export-Mekong-Test", 
-        folder =  export_folder_name, 
-        fileNamePrefix =  file_name + str(sample_num), 
-        fileFormat =  "TFRecord"
-        )
-    
-    task.start()
-    
-    # Log the info in the exporter 
-    
-    
-    return None
+        # Create all of the assetIds for the export functions
+        partition_asset_path = self.asset_directory+'/partitions'
+        
+        # Export the partitions
+        task_1 = ee.batch.Export.table.toAsset(
+            collection = partitions,
+            description = 'Export-Table-Partitions', 
+            assetId = partition_asset_path
+            )
 
+        #Start the tasks
+        task_1.start()
+        
+        return None
 
-main()
+if __name__ == "__main__":
+    
+    # Define an arbitrary geometry
+    input_study_area = ee.Geometry.Polygon([[[104.0311, 14.3134],[104.0311, 12.5128],[106.0416, 12.5128],[106.0416, 14.3134]]], None, False)
+    input_x_cuts = 5
+    input_y_cuts = 5
+    input_num_samples = 4
+    input_kernel_size = 256
+    input_raster_resolution = 10
+    input_projection = ee.Projection('EPSG:32648')
+    export_asset_directory = 'users/JohnBKilbride/SERVIR/real_time_monitoring' 
+    
+    # Instantiate the thing
+    grid_generator = GenerateSamplingGrid(input_study_area, input_x_cuts, input_y_cuts, 
+                                          input_num_samples, input_kernel_size, input_raster_resolution, 
+                                          input_projection, export_asset_directory)
 
-
-
+    # Run the script
+    grid_generator.generate_sample_grid()
+    
+    print('Program is complete')
+    

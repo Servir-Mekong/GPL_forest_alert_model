@@ -192,7 +192,9 @@ class SyntheticAlertGenerator():
             task.start()
             
             # Log the export to the export monitor
-            self.export_monitor.add_task('glad_label_'+str(i+1), task)         
+            self.export_monitor.add_task('glad_label_'+str(i+1), task)   
+            
+            break
         
         # Run the monitoring of the exports
         self.export_monitor.monitor_tasks()
@@ -218,7 +220,7 @@ class SyntheticAlertGenerator():
         # Set the attribute of the GLAD alerts
         self.sample_id_groups = ee.FeatureCollection('users/' + self.username +'/' + self.feat_group_export_id) \
             .randomColumn(columnName='random', seed=5123576) \
-            .sort('random').limit(1000)
+            .sort('random').limit(2000)
         self.glad_labels = ee.FeatureCollection('users/' + self.username + '/' + self.glad_label_export_id) 
         
         # Convert the string representation of the sentinel lists into an image
@@ -239,6 +241,9 @@ class SyntheticAlertGenerator():
             # Check for completed exports every 250 iterations
             if  i % 250 == 0:
                 self.__check_for_monitor_capacity()
+            
+            if i >= 1:
+                break
             
         # Run the monitoring of the exports
         self.export_monitor.monitor_tasks()
@@ -912,75 +917,92 @@ class SyntheticAlertGenerator():
         sample_ids = ee.List(sample.get("id_list")).getInfo()
         model_set = ee.String(sample.get("model_set")).getInfo()
         
-        # Get rid of the leading characters introduced by previous processing steps
-        sample_ids_trimmed = []
-        for sentinel_id in sample_ids:
-            sample_ids_trimmed.append(sentinel_id)
+        if model_set == 'test':
+            pass
         
-        # Convert the IDs to images
-        scenes = []
-        alert_date = None
-        for i in range(0, len(sample_ids_trimmed)):
-        
-            # Get the id from the list of ids
-            scene = ee.Image("COPERNICUS/S1_GRD/"+sample_ids_trimmed[i])
+        else: 
             
-            # Append the scene to the list
-            scenes.append(scene)
+            print(model_set)
             
-            # Get the alert date
-            if i == 0:
-                alert_date = scene.date()
+            # Get rid of the leading characters introduced by previous processing steps
+            sample_ids_trimmed = []
+            for sentinel_id in sample_ids:
+                sample_ids_trimmed.append(sentinel_id)
             
-        # Convert the list of images to an ee.ImageCollection and select the correct bands
-        scenes = ee.ImageCollection.fromImages(scenes) \
-            .select(self.output_bands) \
-            .sort('system:time_start')
-               
-        # Generate the features
-        features = scenes.toBands().rename(self.model_feature_names) \
-            .unmask(-50) .unitScale(-50, 1)
-
-        
-        # Load the GLAD Alert for the scene
-        # print(alert_date.get('year').getInfo(), alert_date.get('month').getInfo(), alert_date.get('day').getInfo())
-        label = self.__retrieve_label(alert_date)
-        
-        # Stack the outputs
-        labels_and_features = ee.Image.cat([features, label]).toFloat()
+            # Convert the IDs to images
+            scenes = []
+            alert_date = None
+            for i in range(0, len(sample_ids_trimmed)):
+            
+                # Get the id from the list of ids
+                scene = ee.Image("COPERNICUS/S1_GRD/"+sample_ids_trimmed[i])
                 
-        # Run the sampling
-        output = self.__sample_model_data(labels_and_features, sample.geometry())
-        
-        # Create the export filename
-        # file_name = 'alert_record_' + partition_id + '_' + str(sample_num)
-        file_name = 'alert_record_' + str(sample_num)
-        
-        # print(output.getInfo())
-        
-        # Initiate the export    
-        task = ee.batch.Export.table.toCloudStorage(
-            collection = ee.FeatureCollection([output]),
-            description = "Export-Mekong-Alert-" + str(sample_num),  
-            bucket = self.gcs_bucket,
-            fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
-            fileFormat = "TFRecord", 
-            )
-        
-        # Check if the number of output features is correct
-        # Number should be: self.model_feature_names + 2
-        target_num_properties = len(self.model_feature_names) + 2 
-        output_num_properties = output.propertyNames().length().getInfo()
-        
-        if target_num_properties == output_num_properties:
-            print('Initating '+str(sample_num+1)+' of '+str(num_exports))            
-            task.start()
-        else:
-            print('Export for index ' + str(sample_num+1) + ' had too few features.')
-
-        # Log the info in the exporter
-        self.export_monitor.add_task('export_'+str(sample_num), task)
+                # Append the scene to the list
+                scenes.append(scene)
+                
+                # Get the alert date
+                if i == 0:
+                    alert_date = scene.date()
+                
+            # Convert the list of images to an ee.ImageCollection and select the correct bands
+            scenes = ee.ImageCollection.fromImages(scenes) \
+                .select(self.output_bands) \
+                .sort('system:time_start')
+                   
+            # Generate the features
+            features = scenes.toBands().rename(self.model_feature_names) \
+                .unmask(-50) .unitScale(-50, 1)
+            
+            # Load the GLAD Alert for the scene
+            print(alert_date.get('year').getInfo(), alert_date.get('month').getInfo(), alert_date.get('day').getInfo())
+            label = self.__retrieve_label(alert_date)
+            
+            # Stack the outputs
+            labels_and_features = ee.Image.cat([features, label]).toFloat()
+                    
+            # Run the sampling
+            output = self.__sample_model_data(labels_and_features, sample.geometry())
+            
+            # Create the export filename
+            file_name = 'alert_record' + '_' + str(sample_num+1)
+            
+            # Export an image
+            clip_geometry = sample.geometry().buffer(self.kernel_size / 2, ee.ErrorMargin(1, 'projected'), self.projection.atScale(10)) \
+                .bounds(ee.ErrorMargin(1, 'projected'), self.projection.atScale(10))
+            image_task = ee.batch.Export.image.toDrive(
+                    image = labels_and_features.clip(clip_geometry).toFloat(), 
+                    description = 'Export-GLAD-Label-' + str(sample_num+1), 
+                    folder = 'GLAD_TEST',
+                    fileNamePrefix = file_name,
+                    scale = 10, 
+                    maxPixels = 1e13
+                    )
+            image_task.start()
+            
+            # Initiate the export    
+            task = ee.batch.Export.table.toCloudStorage(
+                collection = ee.FeatureCollection([output]),
+                description = "Export-Mekong-Alert-" + str(sample_num),  
+                bucket = self.gcs_bucket,
+                fileNamePrefix = self.gcs_export_folder + '/' + model_set + '/' + file_name, 
+                fileFormat = "TFRecord", 
+                selectors = labels_and_features.bandNames().getInfo()
+                )
+            
+            # Check if the number of output features is correct
+            # Number should be: self.model_feature_names + 2
+            target_num_properties = len(self.model_feature_names) + 2 
+            output_num_properties = output.propertyNames().length().getInfo()
+            
+            if target_num_properties == output_num_properties:
+                print('Initating '+str(sample_num+1)+' of '+str(num_exports))            
+                # task.start()
+            else:
+                print('Export for index ' + str(sample_num+1) + ' had too few features.')
     
+            # Log the info in the exporter
+            self.export_monitor.add_task('export_'+str(sample_num), task)
+        
         return None
 
 if __name__ == "__main__":

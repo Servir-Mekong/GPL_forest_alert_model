@@ -2,7 +2,6 @@ import ee
 
 ee.Initialize()
 
-
 def main(study_area, projection, x_cuts, y_cuts, username, output_dir, points):
     
     # Generate the partitions
@@ -20,7 +19,7 @@ def main(study_area, projection, x_cuts, y_cuts, username, output_dir, points):
     task = ee.batch.Export.table.toAsset(
         collection = points, 
         description = 'Export-Sample-Locations-Dataset', 
-        assetId = 'users/'+username+'/'+output_dir+'/'+'sample_locations_2019_2020_train_val_test'
+        assetId = 'users/'+username+'/'+output_dir+'/'+'sample_locations_2019_2020_train_val_test_50k'
         )
     task.start()
 
@@ -177,16 +176,19 @@ def compute_grid_constants (sample_partition, num_samples, prj):
 if __name__ == "__main__":
     
     # Script parameters
-    input_study_area = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/sample_locations_2019_2020").geometry()
+    input_points = ee.FeatureCollection('users/JohnBKilbride/SERVIR/real_time_monitoring/sample_locations_2019_2020_50k')
+    input_study_area = input_points.geometry()
     input_projection = ee.Projection('EPSG:32648')
-    input_x_cuts = 10
-    input_y_cuts = 10
+    input_x_cuts = 20
+    input_y_cuts = 20
     input_username = 'JohnBKilbride'
     input_output_dir = 'SERVIR/real_time_monitoring'
-    input_points = ee.FeatureCollection('users/JohnBKilbride/SERVIR/real_time_monitoring/sample_locations_2019_2020')
     
+    
+    
+    print('Program initiated...')
     main(input_study_area, input_projection, input_x_cuts, input_y_cuts, input_username, input_output_dir, input_points)
-
+    print('\nProgram completed.')
 
 
 
