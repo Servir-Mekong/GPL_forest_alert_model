@@ -65,10 +65,7 @@ def main ():
     return None
 
 def add_start_date (sample_points):
-    '''Get the timing for the "before" image'''  
-    # Load in the landsat imagery
-    landsat = load_landsat_imagery(sample_points.geometry().bounds())
-    
+    '''Get the timing for the "before" image'''      
     # Mapped function to apply over the sample_points ee.FeatureCollection
     def inner_map (sample_point):
     
@@ -96,45 +93,6 @@ def add_start_date (sample_points):
         return output
         
     return sample_points.map(inner_map)
-
-def load_landsat_imagery(input_geometry):
-    '''Loads the total coverage for the study area for the Landsat SR T1 product'''
-    # Load in the Landsat 7 Imagery
-    landsat_7 = ee.ImageCollection("LANDSAT/LE07/C01/T1_SR") \
-        .filterBounds(input_geometry) \
-        .filterDate('2018-01-01', '2022-12-31') \
-        .select(['pixel_qa']) \
-        .map(qa_to_date)
-    
-    # Load in teh Landsat 8 imagery
-    landsat_8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR") \
-        .filterBounds(input_geometry) \
-        .filterDate('2018-01-01', '2022-12-31') \
-        .select(['pixel_qa']) \
-        .map(qa_to_date)
-    
-    # Merge the two collections
-    combined = landsat_7.merge(landsat_8)
-    
-    return ee.ImageCollection(combined)
-
-def qa_to_date (image):
-    '''Function applies the Landsat SR cloud mask (CFMask output).'''
-    # Get the date from the image
-    date = image.date()
-    
-    # Convert the QA band into a binary layer
-    qa = image.select('pixel_qa')
-    mask = qa.bitwiseAnd(1 << 3).eq(0).And(qa.bitwiseAnd(1 << 5).eq(0))
-    
-    # Create the julian date band
-    day = ee.Image.constant(date.getRelative('day', 'year')).rename('qa_day')
-    year = ee.Image.constant(date.get('year')).rename('qa_year')
-    
-    return day.addBands(year).updateMask(mask) \
-        .select(['qa_day', 'qa_year']) \
-        .set('system:time_start', date.millis()) \
-        .toInt16()
         
 def apply_displacement(features, projection, kernel_radius):
 
