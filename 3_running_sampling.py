@@ -7,10 +7,9 @@ ee.Initialize()
 # Load the export monitor
 EXPORT_MONITOR = task_monitor.GEETaskMonitor()
 
+SHIFT_BEFORE = 15
+
 def main ():
-    
-    # print('Sleeping')
-    # sleep(60 * 60 * 6)
     
     # Define the username
     username = "JohnBKilbride"
@@ -33,8 +32,8 @@ def main ():
     glad_alerts = ee.Image('users/JohnBKilbride/SERVIR/real_time_monitoring/glad_alerts_2019_to_2020')
     
     # Load in the sample locations
-    sample_locations = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/sample_locations_2019_2020_train_val_test_50k")
-        # .randomColumn(None, 43214).sort('random').limit(1)
+    sample_locations = ee.FeatureCollection("users/JohnBKilbride/SERVIR/real_time_monitoring/sample_locations_2019_2020_train_val_test_50k") \
+        .randomColumn(None, 43214).sort('random').limit(5)
     
     #################################### Ignore stuff below #######################
     
@@ -213,6 +212,9 @@ def create_after_image (sentinel, year, alert_date, geometry):
 
 # Calculate the GLAD label for the GLAD Alerts
 def  calculate_glad_label(glad_alerts, before_day, after_day, before_year, after_year):
+    
+    # # Increase the before date by an arbitrary constant
+    before_year = before_year.add(SHIFT_BEFORE)
     
     # Process the 2019 label
     image_2019_a = glad_alerts.select('alertDate19').gte(before_day).And(ee.Number(before_year).eq(2018).Or(ee.Number(before_year).eq(2019)))

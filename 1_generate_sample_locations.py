@@ -3,11 +3,10 @@ from time import sleep
 
 ee.Initialize()
 
+SHIFT_BEFORE = 60
+
 def main ():
 
-    print('sleeping...')
-    sleep(60 * 60 * 2)
-    
     # Load in the pre-processed GLAD alerts
     glad_alerts = ee.Image('users/JohnBKilbride/SERVIR/real_time_monitoring/glad_alerts_2019_to_2020')
         
@@ -81,8 +80,8 @@ def add_start_date (sample_points):
             .advance(ee.Number(alert_day), 'day')
         
         # Get the start date
-        start_day = ee.Number(glad_alert_date.advance(-40, 'day').getRelative('day', 'year'))
-        start_year = ee.Number(glad_alert_date.advance(-40, 'day').get('year'))
+        start_day = ee.Number(glad_alert_date.advance(SHIFT_BEFORE, 'day').getRelative('day', 'year'))
+        start_year = ee.Number(glad_alert_date.advance(SHIFT_BEFORE, 'day').get('year'))
         
         # Append the sampled values to the original feature
         output = sample_point.set({
