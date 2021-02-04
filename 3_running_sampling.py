@@ -3,7 +3,7 @@ from time import sleep
 from utils import task_monitor
 import math
 import numpy as np
-
+import random
 from numpy.random import seed
 from numpy.random import rand
 
@@ -22,12 +22,13 @@ def main ():
     
     
     outputBucket = "bucketsvmk"
-    folder = "alerts/gladAlertv64v4"
+    folder = "alerts/gladAlerts256v1"
     
-    featureNames = ['VH_after0', 'VH_before0', 'VH_before1', 'VH_before2', 'VV_after0', 'VV_before0', 'VV_before1', 'VV_before2', 'glad_alert', 'non_alert']
+    #featureNames = ['VH_after0', 'VH_before0', 'VH_before1', 'VH_before2', 'VV_after0', 'VV_before0', 'VV_before1', 'VV_before2', 'glad_alert', 'non_alert']
+    featureNames = ['VH_after0','VH_after1','VH_before0', 'VH_before1','VH_before2','VV_after0','VV_after1', 'VV_before0', 'VV_before1', 'VV_before2', 'glad_alert', 'non_alert']
 
     # Define kernel size 
-    kernel_size = 64
+    kernel_size = 256
     image_kernel = get_kernel(kernel_size)
     
     
@@ -36,15 +37,20 @@ def main ():
     
     # Load in the GLAD Alert Images
     
-    year = 2019
+    year = 2017
+    
+    #//gpl = ee.FeatureCollection("projects/cemis-camp/assets/Temp/preyLang")
     
     # Import alert features with Landsat Observation date
     
-    sample_locations =ee.FeatureCollection("projects/cemis-camp/assets/alerts/alerts"+str(year))
-    
-    labels = ee.Image("projects/cemis-camp/assets/glad2020/alert" + str(year)[2:]+ "_100E_10N_110E_20N")
-    
-    #label = label.unmask(0)	
+    #sample_locations =ee.FeatureCollection("projects/cemis-camp/assets/alerts/alerts"+str(year)).filterBounds(gpl)
+    sample_locations =ee.FeatureCollection("projects/cemis-camp/assets/alerts/alertsLoss"+str(year)+"v1")
+    #sample_locations =ee.FeatureCollection("projects/cemis-camp/assets/alerts/alertsRandom")
+
+    start = ee.Date.fromYMD(year,1,1)
+    end = ee.Date.fromYMD(year,12,31)
+    labels = ee.Image(ee.ImageCollection("projects/servir-mekong/UMD/lossLayer").filterDate(start,end).first())
+
     label = labels.gt(0).rename(['glad_alert'])
     nonLabel = label.remap([0,1],[1,0]).rename(["non_alert"])
 
@@ -62,23 +68,35 @@ def main ():
 
     beforeDate = ee.Date.fromYMD(year,1,1) 
     afterDate = ee.Date.fromYMD(year,12,31)
+    sample_locations = sample_locations.toList(85000)
     
-    before = createSeriesBefore(s1,beforeDate)
-    after = createSeriesAfter(s1,afterDate)
+    s = 1200
+    start = s*10
+    for i in range(s,1500,1):
 
-    image = before.addBands(after).addBands(label).addBands(nonLabel).unmask(0,False)
-    sample_locations = sample_locations.toList(15000)
+	before = createSeriesBefore(s1,beforeDate,i)
+	after = createSeriesAfter(s1,afterDate,i)
 
-    for i in range(0,100,1):
-	p1 = ee.Feature(sample_locations.get(i))
+	image = before.addBands(after).addBands(label).addBands(nonLabel).unmask(0,False)
 	
-	bounds = p1.geometry().buffer(320).bounds()
-	points = ee.FeatureCollection.randomPoints(region=bounds, points=10, seed=i)
-	
+
+	#def addRandomPoints(feature):
+	#    bounds = feature.geometry().buffer(3686).bounds()
+	#    points = ee.FeatureCollection.randomPoints(region=bounds, points=3, seed=i)
+	#    return points
+
+
+	end = start+10
+	print(start)
+	points = ee.FeatureCollection(sample_locations.slice(start,end)) #.map(addRandomPoints).flatten()
+	start +=10
+
+
 	neighborhood = image.neighborhoodToArray(image_kernel) 
 	trainingData = neighborhood.sample(region = points,scale= 10,tileScale= 16, geometries= True)
 	
 	sample = ee.Feature(trainingData.first())
+	#print(sample.getInfo())
 	
 	if values[i]<=0.1:
 	    trainFilePrefix = "/validation/valid" + str(year) + "_" + str(i).zfill(4)
@@ -98,10 +116,16 @@ def main ():
 
 
 
-def createSeriesBefore(collection,date,iters=3,nday =12):
+def createSeriesBefore(collection,date,val,iters=3,nday =12):
     
-    iterations = range(1,iters*nday,nday)
+    iterations = []
+    # Set a length of the list to 10
+    for i in range(0, iters):
+	# any random numbers from 0 to 1000
+	iterations.append(random.randint(0, 182))
     
+    #iterations = range(1,iters*nday,nday)
+    #print(iterations)
     names = ["_before{:01d}".format(x) for x in range(0,iters,1)]
 
     def returnCollection(day,name):
@@ -114,10 +138,19 @@ def createSeriesBefore(collection,date,iters=3,nday =12):
     
     return toBands(ee.ImageCollection.fromImages(map(returnCollection,iterations,names)))
 
-def createSeriesAfter(collection,date,iters=1,nday =12):
+def createSeriesAfter(collection,date,val,iters=2,nday =12):
     
-    iterations = range(1,iters*nday,nday)
+    #iterations = range(1,iters*nday,nday)
+    random.seed(val)
+    iterations = []
+    # Set a length of the list to 10
+    for i in range(0, iters):
+	# any random numbers from 0 to 1000
+	iterations.append(random.randint(0, 182))
     
+    #iterations = range(1,iters*nday,nday)
+    #print(iterations)
+   
     names = ["_after{:01d}".format(x) for x in range(0,iters,1)]
 
     def returnCollection(day,name):
